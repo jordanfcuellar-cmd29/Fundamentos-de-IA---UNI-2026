@@ -1,0 +1,205 @@
+import random
+
+# Vectores de dirección y rotaciones
+ORIENTACIONES = ['▲', '►', '▼', '◄']
+DELTAS = {
+    '▲': (-1, 0),
+    '►': (0, 1),
+    '▼': (1, 0),
+    '◄': (0, -1)
+}
+
+class Entorno:
+    def __init__(self, filas=8, columnas=10):
+        self.filas = filas
+        self.columnas = columnas
+        # Matriz: 0 = Piso no Oscuro (Claro), 1 = Piso Oscuro (Línea)
+        self.malla = [[0 for _ in range(columnas)] for _ in range(filas)]
+        self._generar_camino_aleatorio()
+
+    def _generar_camino_aleatorio(self):
+        f = random.randint(1, self.filas - 2)
+        c = random.randint(1, self.columnas - 2)
+        self.malla[f][c] = 1
+        pasos = (self.filas * self.columnas) // 2
+
+        for _ in range(pasos):
+            df, dc = random.choice([(-1, 0), (1, 0), (0, -1), (0, 1)])
+            nf, nc = f + df, c + dc
+            if 0 <= nf < self.filas and 0 <= nc < self.columnas:
+                # 15% de probabilidad de dejar un hueco (línea discontinua)
+                self.malla[nf][nc] = 1 if random.random() > 0.15 else 0
+                f, c = nf, nc
+
+    def obtener_celda(self, f, c):
+        if 0 <= f < self.filas and 0 <= c < self.columnas:
+            return "Piso Oscuro" if self.malla[f][c] == 1 else "Piso no Oscuro"
+        return "Borde"
+
+
+class AgenteSeguidor:
+    def __init__(self, f_ini, c_ini, orientacion='►'):
+        self.fila = f_ini
+        self.col = c_ini
+        self.orientacion = orientacion
+        self.recuerdo_choque = False
+        
+        # Métricas de desempeño
+        self.historial_estados = []
+        self.reglas_usadas = set()
+        self.total_avances = 0
+        self.avances_exitosos = 0
+        self.total_rotaciones = 0
+        self.total_choques = 0
+        self.choques_antes_linea = 0
+        self.encontro_primera_linea = False
+        self.posiciones_visitadas = []
+
+    def rotar(self, angulo):
+        idx = ORIENTACIONES.index(self.orientacion)
+        idx = (idx + 1) % 4 if angulo == 90 else (idx - 1) % 4
+        self.orientacion = ORIENTACIONES[idx]
+        self.total_rotaciones += 1
+
+    def percibir(self, entorno):
+        piso_actual = entorno.obtener_celda(self.fila, self.col)
+        df, dc = DELTAS[self.orientacion]
+
+        # Celda central delantera
+        cf, cc = self.fila + df, self.col + dc
+        centro = entorno.obtener_celda(cf, cc)
+
+        # Celdas laterales delanteras (izquierda y derecha relativas)
+        idx = ORIENTACIONES.index(self.orientacion)
+        df_izq, dc_izq = DELTAS[ORIENTACIONES[(idx - 1) % 4]]
+        df_der, dc_der = DELTAS[ORIENTACIONES[(idx + 1) % 4]]
+
+        izq = entorno.obtener_celda(cf + df_izq, cc + dc_izq)
+        der = entorno.obtener_celda(cf + df_der, cc + dc_der)
+
+        return piso_actual, izq, centro, der
+
+    def avanzar(self, entorno):
+        self.total_avances += 1
+        df, dc = DELTAS[self.orientacion]
+        nf, nc = self.fila + df, self.col + dc
+
+        if entorno.obtener_celda(nf, nc) == "Borde":
+            self.total_choques += 1
+            self.recuerdo_choque = True
+            if not self.encontro_primera_linea:
+                self.choques_antes_linea += 1
+            return False
+        else:
+            self.fila, self.col = nf, nc
+            self.recuerdo_choque = False
+            self.avances_exitosos += 1
+            self.posiciones_visitadas.append((self.fila, self.col))
+            if entorno.obtener_celda(self.fila, self.col) == "Piso Oscuro":
+                self.encontro_primera_linea = True
+            return True
+
+    def actuar(self, entorno):
+        piso_actual, izq, centro, der = self.percibir(entorno)
+        
+        # Registrar estado para detección de bucles
+        estado_actual = (self.fila, self.col, self.orientacion, self.recuerdo_choque)
+        self.historial_estados.append(estado_actual)
+
+        # R1: Choque previo
+        if self.recuerdo_choque:
+            self.reglas_usadas.add("R1")
+            if izq == "Piso Oscuro":
+                self.rotar(90)
+                self.avanzar(entorno)
+            elif der == "Piso Oscuro":
+                self.rotar(-90)
+                self.avanzar(entorno)
+            elif izq != "Borde":
+                self.rotar(90)
+                self.avanzar(entorno)
+            elif der != "Borde":
+                self.rotar(-90)
+                self.avanzar(entorno)
+            else:
+                self.rotar(90)
+                self.rotar(90)
+            return
+
+        # R2: Centro oscuro
+        if centro == "Piso Oscuro":
+            self.reglas_usadas.add("R2")
+            self.avanzar(entorno)
+        # R3: Izquierda oscura
+        elif izq == "Piso Oscuro":
+            self.reglas_usadas.add("R3")
+            self.rotar(90)
+            self.avanzar(entorno)
+        # R4: Derecha oscura
+        elif der == "Piso Oscuro":
+            self.reglas_usadas.add("R4")
+            self.rotar(-90)
+            self.avanzar(entorno)
+        # R5: Centro es borde
+        elif centro == "Borde":
+            self.reglas_usadas.add("R5")
+            if izq != "Borde":
+                self.rotar(90)
+                self.avanzar(entorno)
+            elif der != "Borde":
+                self.rotar(-90)
+                self.avanzar(entorno)
+            else:
+                self.rotar(90)
+                self.rotar(90)
+        # R6: Avance por celda clara
+        else:
+            self.reglas_usadas.add("R6")
+            self.avanzar(entorno)
+
+
+def detectar_bucle(historial):
+    vistos = {}
+    for paso, est in enumerate(historial):
+        if est in vistos:
+            return vistos[est], paso  # paso inicial, paso repetido
+        vistos[est] = paso
+    return None, None
+
+
+# ==========================================
+# SIMULACIÓN Y PRUEBA
+# ==========================================
+if __name__ == "__main__":
+    random.seed(42)  # Semilla fija para reproducibilidad
+    entorno = Entorno(filas=7, columnas=9)
+    agente = AgenteSeguidor(f_ini=1, c_ini=1, orientacion='►')
+    MAX_ITER = 60
+
+    print("--- INICIO DE LA SIMULACIÓN ---")
+    bucle_detectado = False
+
+    for paso in range(MAX_ITER):
+        agente.actuar(entorno)
+        ini, rep = detectar_bucle(agente.historial_estados)
+        if ini is not None:
+            print(f"\n[!] Bucle infinito detectado en el paso {rep}. Inicio del ciclo en paso {ini}.")
+            print(f"Tamaño del bucle: {rep - ini} iteraciones.")
+            bucle_detectado = True
+            break
+
+    # Estadísticas finales
+    total_visitadas = len(agente.posiciones_visitadas)
+    oscuras_visitadas = sum(
+        1 for f, c in agente.posiciones_visitadas if entorno.malla[f][c] == 1
+    )
+    adherencia = (oscuras_visitadas / total_visitadas * 100) if total_visitadas > 0 else 0.0
+    tasa_choque = (agente.total_choques / agente.total_avances * 100) if agente.total_avances > 0 else 0.0
+
+    print("\n--- RESULTADOS Y DESEMPEÑO ---")
+    print(f"Número de reglas distintas usadas: {len(agente.reglas_usadas)} -> {sorted(list(agente.reglas_usadas))}")
+    print(f"Choques antes de encontrar la línea: {agente.choques_antes_linea}")
+    print(f"Total de intentos de avance: {agente.total_avances} (Exitosos: {agente.avances_exitosos})")
+    print(f"Total de rotaciones ejecutadas: {agente.total_rotaciones}")
+    print(f"Adherencia a la línea: {adherencia:.2f}%")
+    print(f"Tasa de choques: {tasa_choque:.2f}%")
